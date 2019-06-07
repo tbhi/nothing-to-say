@@ -1,15 +1,27 @@
-const ExtensionUtils = imports.misc.extensionUtils;
+
+'use strict';
+
 const Gio = imports.gi.Gio;
+const GLib = imports.gi.GLib;
+const GObject = imports.gi.GObject;
+const St = imports.gi.St;
+
+const ExtensionUtils = imports.misc.extensionUtils;
+const Me = ExtensionUtils.getCurrentExtension();
+const Main = imports.ui.main;
+const PanelMenu = imports.ui.panelMenu;
+
 const Gvc = imports.gi.Gvc;
 const Lang = imports.lang;
-const Main = imports.ui.main;
 const Mainloop = imports.mainloop;
 const Meta = imports.gi.Meta;
 const Shell = imports.gi.Shell;
 const Signals = imports.signals;
-const St = imports.gi.St;
 
 const KEYBINDING_KEY_NAME = 'keybinding-toggle-mute';
+
+const Config = imports.misc.config;
+const SHELL_MINOR = parseInt(Config.PACKAGE_VERSION.split('.')[1]);
 
 let microphone;
 
@@ -147,58 +159,67 @@ function get_settings() {
 
 const settings = get_settings();
 
+var Indicator = class Indicator extends PanelMenu.Button {
+
+  _init() {
+      super._init(0.0, `${Me.metadata.name} Indicator`, false);
+
+      let icon = new St.Icon({
+          gicon: new Gio.ThemedIcon({name: get_icon_name(false)}),
+          style_class: 'system-status-icon'
+      });
+      this.actor.add_child(icon);
+      this.actor.connect('button-press-event', on_activate);
+      microphone.connect(
+        'notify::muted',
+        function () {
+          icon.set_gicon(new Gio.ThemedIcon({name: get_icon_name(microphone.muted)}));
+        });
+    
+  }
+}
+
+if (SHELL_MINOR > 30) {
+  Indicator = GObject.registerClass(
+    {GTypeName: 'Indicator'},
+    Indicator
+  );
+}
+
 function init() {
 }
 
 let panel_button, panel_icon;
 let initialised = false;  // flag to avoid notifications on startup
+let indicator = null;
 
 function enable() {
   microphone = new Microphone();
-  panel_icon = new St.Icon({
-    icon_name: '',
-    style_class: 'system-status-icon'});
-  panel_button = new St.Bin({
-    style_class: 'panel-button',
-    reactive: true,
-    can_focus: true,
-    x_fill: true,
-    y_fill: false,
-    track_hover: true,
-    visible: microphone.active});
-  panel_button.set_child(panel_icon);
-  panel_button.connect('button-press-event', on_activate);
   microphone.connect(
     'notify::active',
     function() {
-      panel_button.visible = microphone.active;
       if (initialised || microphone.active)
         show_osd(
           microphone.active ? "Microphone activated" : "Microphone deactivated",
           microphone.muted);
       initialised = true;
     });
-  microphone.connect(
-    'notify::muted',
-    function () {
-      panel_icon.icon_name = get_icon_name(microphone.muted);
-    });
-  Main.panel._rightBox.insert_child_at_index(panel_button, 0);
+  indicator = new Indicator();
+  Main.panel.addToStatusArea(`${Me.metadata.name} Indicator`, indicator);  
   Main.wm.addKeybinding(
     KEYBINDING_KEY_NAME,
     settings,
     Meta.KeyBindingFlags.NONE,
-    Shell.ActionMode.NORMAL | Shell.ActionMode.MESSAGE_TRAY,
+    Shell.ActionMode.ALL,
     on_activate);
 }
 
 function disable() {
   Main.wm.removeKeybinding(KEYBINDING_KEY_NAME);
-  Main.panel._rightBox.remove_child(panel_button);
+  if (indicator !== null) {
+    indicator.destroy();
+    indicator = null;
+  }  
   microphone.destroy();
   microphone = null;
-  panel_icon.destroy();
-  panel_icon = null;
-  panel_button.destroy();
-  panel_button = null;
 }
